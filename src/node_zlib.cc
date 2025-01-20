@@ -25,6 +25,7 @@
 
 #include "async_wrap-inl.h"
 #include "env-inl.h"
+#include "node_errors.h"
 #include "node_external_reference.h"
 #include "threadpoolwork-inl.h"
 #include "util-inl.h"
@@ -49,10 +50,10 @@ using v8::Context;
 using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Global;
 using v8::HandleScope;
 using v8::Int32;
 using v8::Integer;
+using v8::Isolate;
 using v8::Local;
 using v8::Object;
 using v8::Uint32Array;
@@ -107,8 +108,8 @@ enum node_zlib_mode {
   BROTLI_ENCODE
 };
 
-#define GZIP_HEADER_ID1 0x1f
-#define GZIP_HEADER_ID2 0x8b
+constexpr uint8_t GZIP_HEADER_ID1 = 0x1f;
+constexpr uint8_t GZIP_HEADER_ID2 = 0x8b;
 
 struct CompressionError {
   CompressionError(const char* message, const char* code, int err)
@@ -127,14 +128,14 @@ struct CompressionError {
   inline bool IsError() const { return code != nullptr; }
 };
 
-class ZlibContext : public MemoryRetainer {
+class ZlibContext final : public MemoryRetainer {
  public:
   ZlibContext() = default;
 
   // Streaming-related, should be available for all compression libraries:
   void Close();
   void DoThreadPoolWork();
-  void SetBuffers(char* in, uint32_t in_len, char* out, uint32_t out_len);
+  void SetBuffers(const char* in, uint32_t in_len, char* out, uint32_t out_len);
   void SetFlush(int flush);
   void GetAfterWriteOffsets(uint32_t* avail_in, uint32_t* avail_out) const;
   CompressionError GetErrorInfo() const;
@@ -183,7 +184,7 @@ class BrotliContext : public MemoryRetainer {
  public:
   BrotliContext() = default;
 
-  void SetBuffers(char* in, uint32_t in_len, char* out, uint32_t out_len);
+  void SetBuffers(const char* in, uint32_t in_len, char* out, uint32_t out_len);
   void SetFlush(int flush);
   void GetAfterWriteOffsets(uint32_t* avail_in, uint32_t* avail_out) const;
   inline void SetMode(node_zlib_mode mode) { mode_ = mode; }
@@ -193,7 +194,7 @@ class BrotliContext : public MemoryRetainer {
 
  protected:
   node_zlib_mode mode_ = NONE;
-  uint8_t* next_in_ = nullptr;
+  const uint8_t* next_in_ = nullptr;
   uint8_t* next_out_ = nullptr;
   size_t avail_in_ = 0;
   size_t avail_out_ = 0;
@@ -251,19 +252,27 @@ class BrotliDecoderContext final : public BrotliContext {
 template <typename CompressionContext>
 class CompressionStream : public AsyncWrap, public ThreadPoolWork {
  public:
+  enum InternalFields {
+    kCompressionStreamBaseField = AsyncWrap::kInternalFieldCount,
+    kWriteJSCallback,
+    kInternalFieldCount
+  };
+
   CompressionStream(Environment* env, Local<Object> wrap)
       : AsyncWrap(env, wrap, AsyncWrap::PROVIDER_ZLIB),
-        ThreadPoolWork(env),
+        ThreadPoolWork(env, "zlib"),
         write_result_(nullptr) {
     MakeWeak();
   }
 
   ~CompressionStream() override {
-    CHECK_EQ(false, write_in_progress_ && "write in progress");
+    CHECK(!write_in_progress_);
     Close();
     CHECK_EQ(zlib_memory_, 0);
     CHECK_EQ(unreported_allocations_, 0);
   }
+
+  Environment* env() const { return this->ThreadPoolWork::env(); }
 
   void Close() {
     if (write_in_progress_) {
@@ -282,7 +291,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
 
   static void Close(const FunctionCallbackInfo<Value>& args) {
     CompressionStream* ctx;
-    ASSIGN_OR_RETURN_UNWRAP(&ctx, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&ctx, args.This());
     ctx->Close();
   }
 
@@ -295,7 +304,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     CHECK_EQ(args.Length(), 7);
 
     uint32_t in_off, in_len, out_off, out_len, flush;
-    char* in;
+    const char* in;
     char* out;
 
     CHECK_EQ(false, args[0]->IsUndefined() && "must provide flush value");
@@ -307,7 +316,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
         flush != Z_FULL_FLUSH &&
         flush != Z_FINISH &&
         flush != Z_BLOCK) {
-      CHECK(0 && "Invalid flush value");
+      UNREACHABLE("Invalid flush value");
     }
 
     if (args[1]->IsNull()) {
@@ -333,14 +342,14 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     out = Buffer::Data(out_buf) + out_off;
 
     CompressionStream* ctx;
-    ASSIGN_OR_RETURN_UNWRAP(&ctx, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&ctx, args.This());
 
     ctx->Write<async>(flush, in, in_len, out, out_len);
   }
 
   template <bool async>
   void Write(uint32_t flush,
-             char* in, uint32_t in_len,
+             const char* in, uint32_t in_len,
              char* out, uint32_t out_len) {
     AllocScope alloc_scope(this);
 
@@ -355,7 +364,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     ctx_.SetBuffers(in, in_len, out, out_len);
     ctx_.SetFlush(flush);
 
-    if (!async) {
+    if constexpr (!async) {
       // sync version
       AsyncWrap::env()->PrintSyncTrace();
       DoThreadPoolWork();
@@ -394,6 +403,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
 
   // v8 land!
   void AfterThreadPoolWork(int status) override {
+    DCHECK(init_done_);
     AllocScope alloc_scope(this);
     auto on_scope_leave = OnScopeLeave([&]() { Unref(); });
 
@@ -416,9 +426,9 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     UpdateWriteResult();
 
     // call the write() cb
-    Local<Function> cb = PersistentToLocal::Default(env->isolate(),
-                                                    write_js_callback_);
-    MakeCallback(cb, 0, nullptr);
+    Local<Value> cb =
+        object()->GetInternalField(kWriteJSCallback).template As<Value>();
+    MakeCallback(cb.As<Function>(), 0, nullptr);
 
     if (pending_close_)
       Close();
@@ -431,7 +441,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     CHECK_EQ(env->context(), env->isolate()->GetCurrentContext());
 
     HandleScope scope(env->isolate());
-    Local<Value> args[3] = {
+    Local<Value> args[] = {
       OneByteString(env->isolate(), err.message),
       Integer::New(env->isolate(), err.err),
       OneByteString(env->isolate(), err.code)
@@ -446,7 +456,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
 
   static void Reset(const FunctionCallbackInfo<Value> &args) {
     CompressionStream* wrap;
-    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.This());
 
     AllocScope alloc_scope(wrap);
     const CompressionError err = wrap->context()->ResetStream();
@@ -465,7 +475,7 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
 
   void InitStream(uint32_t* write_result, Local<Function> write_js_callback) {
     write_result_ = write_result;
-    write_js_callback_.Reset(AsyncWrap::env()->isolate(), write_js_callback);
+    object()->SetInternalField(kWriteJSCallback, write_js_callback);
     init_done_ = true;
   }
 
@@ -486,7 +496,9 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
     size += sizeof(size_t);
     CompressionStream* ctx = static_cast<CompressionStream*>(data);
     char* memory = UncheckedMalloc(size);
-    if (UNLIKELY(memory == nullptr)) return nullptr;
+    if (memory == nullptr) [[unlikely]] {
+      return nullptr;
+    }
     *reinterpret_cast<size_t*>(memory) = size;
     ctx->unreported_allocations_.fetch_add(size,
                                            std::memory_order_relaxed);
@@ -494,7 +506,9 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
   }
 
   static void FreeForZlib(void* data, void* pointer) {
-    if (UNLIKELY(pointer == nullptr)) return;
+    if (pointer == nullptr) [[unlikely]] {
+      return;
+    }
     CompressionStream* ctx = static_cast<CompressionStream*>(data);
     char* real_pointer = static_cast<char*>(pointer) - sizeof(size_t);
     size_t real_size = *reinterpret_cast<size_t*>(real_pointer);
@@ -540,14 +554,13 @@ class CompressionStream : public AsyncWrap, public ThreadPoolWork {
   bool closed_ = false;
   unsigned int refs_ = 0;
   uint32_t* write_result_ = nullptr;
-  Global<Function> write_js_callback_;
   std::atomic<ssize_t> unreported_allocations_{0};
   size_t zlib_memory_ = 0;
 
   CompressionContext ctx_;
 };
 
-class ZlibStream : public CompressionStream<ZlibContext> {
+class ZlibStream final : public CompressionStream<ZlibContext> {
  public:
   ZlibStream(Environment* env, Local<Object> wrap, node_zlib_mode mode)
     : CompressionStream(env, wrap) {
@@ -579,7 +592,7 @@ class ZlibStream : public CompressionStream<ZlibContext> {
       " dictionary)");
 
     ZlibStream* wrap;
-    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.This());
 
     Local<Context> context = args.GetIsolate()->GetCurrentContext();
 
@@ -601,8 +614,7 @@ class ZlibStream : public CompressionStream<ZlibContext> {
     CHECK(args[4]->IsUint32Array());
     Local<Uint32Array> array = args[4].As<Uint32Array>();
     Local<ArrayBuffer> ab = array->Buffer();
-    uint32_t* write_result = static_cast<uint32_t*>(
-        ab->GetBackingStore()->Data());
+    uint32_t* write_result = static_cast<uint32_t*>(ab->Data());
 
     CHECK(args[5]->IsFunction());
     Local<Function> write_js_callback = args[5].As<Function>();
@@ -628,7 +640,7 @@ class ZlibStream : public CompressionStream<ZlibContext> {
   static void Params(const FunctionCallbackInfo<Value>& args) {
     CHECK(args.Length() == 2 && "params(level, strategy)");
     ZlibStream* wrap;
-    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.This());
     Local<Context> context = args.GetIsolate()->GetCurrentContext();
     int level;
     if (!args[0]->Int32Value(context).To(&level)) return;
@@ -646,7 +658,8 @@ class ZlibStream : public CompressionStream<ZlibContext> {
 };
 
 template <typename CompressionContext>
-class BrotliCompressionStream : public CompressionStream<CompressionContext> {
+class BrotliCompressionStream final :
+  public CompressionStream<CompressionContext> {
  public:
   BrotliCompressionStream(Environment* env,
                           Local<Object> wrap,
@@ -670,7 +683,7 @@ class BrotliCompressionStream : public CompressionStream<CompressionContext> {
 
   static void Init(const FunctionCallbackInfo<Value>& args) {
     BrotliCompressionStream* wrap;
-    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
+    ASSIGN_OR_RETURN_UNWRAP(&wrap, args.This());
     CHECK(args.Length() == 3 && "init(params, writeResult, writeCallback)");
 
     CHECK(args[1]->IsUint32Array());
@@ -688,7 +701,11 @@ class BrotliCompressionStream : public CompressionStream<CompressionContext> {
           static_cast<CompressionStream<CompressionContext>*>(wrap));
     if (err.IsError()) {
       wrap->EmitError(err);
-      args.GetReturnValue().Set(false);
+      // TODO(addaleax): Sometimes we generate better error codes in C++ land,
+      // e.g. ERR_BROTLI_PARAM_SET_FAILED -- it's hard to access them with
+      // the current bindings setup, though.
+      THROW_ERR_ZLIB_INITIALIZATION_FAILED(wrap->env(),
+                                           "Initialization failed");
       return;
     }
 
@@ -702,12 +719,11 @@ class BrotliCompressionStream : public CompressionStream<CompressionContext> {
       err = wrap->context()->SetParams(i, data[i]);
       if (err.IsError()) {
         wrap->EmitError(err);
-        args.GetReturnValue().Set(false);
+        THROW_ERR_ZLIB_INITIALIZATION_FAILED(wrap->env(),
+                                             "Initialization failed");
         return;
       }
     }
-
-    args.GetReturnValue().Set(true);
   }
 
   static void Params(const FunctionCallbackInfo<Value>& args) {
@@ -792,7 +808,7 @@ void ZlibContext::DoThreadPoolWork() {
             break;
           }
 
-          // fallthrough
+          [[fallthrough]];
         case 1:
           if (next_expected_header_byte == nullptr) {
             break;
@@ -809,10 +825,10 @@ void ZlibContext::DoThreadPoolWork() {
 
           break;
         default:
-          CHECK(0 && "invalid number of gzip magic number bytes read");
+          UNREACHABLE("invalid number of gzip magic number bytes read");
       }
 
-      // fallthrough
+      [[fallthrough]];
     case INFLATE:
     case GUNZIP:
     case INFLATERAW:
@@ -857,10 +873,10 @@ void ZlibContext::DoThreadPoolWork() {
 }
 
 
-void ZlibContext::SetBuffers(char* in, uint32_t in_len,
+void ZlibContext::SetBuffers(const char* in, uint32_t in_len,
                              char* out, uint32_t out_len) {
   strm_.avail_in = in_len;
-  strm_.next_in = reinterpret_cast<Bytef*>(in);
+  strm_.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(in));
   strm_.avail_out = out_len;
   strm_.next_out = reinterpret_cast<Bytef*>(out);
 }
@@ -1093,9 +1109,9 @@ CompressionError ZlibContext::SetParams(int level, int strategy) {
 }
 
 
-void BrotliContext::SetBuffers(char* in, uint32_t in_len,
+void BrotliContext::SetBuffers(const char* in, uint32_t in_len,
                                char* out, uint32_t out_len) {
-  next_in_ = reinterpret_cast<uint8_t*>(in);
+  next_in_ = reinterpret_cast<const uint8_t*>(in);
   next_out_ = reinterpret_cast<uint8_t*>(out);
   avail_in_ = in_len;
   avail_out_ = out_len;
@@ -1251,21 +1267,22 @@ CompressionError BrotliDecoderContext::GetErrorInfo() const {
 template <typename Stream>
 struct MakeClass {
   static void Make(Environment* env, Local<Object> target, const char* name) {
-    Local<FunctionTemplate> z = env->NewFunctionTemplate(Stream::New);
+    Isolate* isolate = env->isolate();
+    Local<FunctionTemplate> z = NewFunctionTemplate(isolate, Stream::New);
 
     z->InstanceTemplate()->SetInternalFieldCount(
         Stream::kInternalFieldCount);
     z->Inherit(AsyncWrap::GetConstructorTemplate(env));
 
-    env->SetProtoMethod(z, "write", Stream::template Write<true>);
-    env->SetProtoMethod(z, "writeSync", Stream::template Write<false>);
-    env->SetProtoMethod(z, "close", Stream::Close);
+    SetProtoMethod(isolate, z, "write", Stream::template Write<true>);
+    SetProtoMethod(isolate, z, "writeSync", Stream::template Write<false>);
+    SetProtoMethod(isolate, z, "close", Stream::Close);
 
-    env->SetProtoMethod(z, "init", Stream::Init);
-    env->SetProtoMethod(z, "params", Stream::Params);
-    env->SetProtoMethod(z, "reset", Stream::Reset);
+    SetProtoMethod(isolate, z, "init", Stream::Init);
+    SetProtoMethod(isolate, z, "params", Stream::Params);
+    SetProtoMethod(isolate, z, "reset", Stream::Reset);
 
-    env->SetConstructorFunction(target, name, z);
+    SetConstructorFunction(env->context(), target, name, z);
   }
 
   static void Make(ExternalReferenceRegistry* registry) {
@@ -1279,6 +1296,33 @@ struct MakeClass {
   }
 };
 
+template <typename T, typename F>
+T CallOnSequence(v8::Isolate* isolate, Local<Value> value, F callback) {
+  if (value->IsString()) {
+    Utf8Value data(isolate, value);
+    return callback(data.out(), data.length());
+  } else {
+    ArrayBufferViewContents<char> data(value);
+    return callback(data.data(), data.length());
+  }
+}
+
+// TODO(joyeecheung): use fast API
+static void CRC32(const FunctionCallbackInfo<Value>& args) {
+  CHECK(args[0]->IsArrayBufferView() || args[0]->IsString());
+  CHECK(args[1]->IsUint32());
+  uint32_t value = args[1].As<v8::Uint32>()->Value();
+
+  uint32_t result = CallOnSequence<uint32_t>(
+      args.GetIsolate(),
+      args[0],
+      [&](const char* data, size_t size) -> uint32_t {
+        return crc32(value, reinterpret_cast<const Bytef*>(data), size);
+      });
+
+  args.GetReturnValue().Set(result);
+}
+
 void Initialize(Local<Object> target,
                 Local<Value> unused,
                 Local<Context> context,
@@ -1289,6 +1333,7 @@ void Initialize(Local<Object> target,
   MakeClass<BrotliEncoderStream>::Make(env, target, "BrotliEncoder");
   MakeClass<BrotliDecoderStream>::Make(env, target, "BrotliDecoder");
 
+  SetMethod(context, target, "crc32", CRC32);
   target->Set(env->context(),
               FIXED_ONE_BYTE_STRING(env->isolate(), "ZLIB_VERSION"),
               FIXED_ONE_BYTE_STRING(env->isolate(), ZLIB_VERSION)).Check();
@@ -1298,6 +1343,7 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   MakeClass<ZlibStream>::Make(registry);
   MakeClass<BrotliEncoderStream>::Make(registry);
   MakeClass<BrotliDecoderStream>::Make(registry);
+  registry->Register(CRC32);
 }
 
 }  // anonymous namespace
@@ -1424,5 +1470,5 @@ void DefineZlibConstants(Local<Object> target) {
 
 }  // namespace node
 
-NODE_MODULE_CONTEXT_AWARE_INTERNAL(zlib, node::Initialize)
-NODE_MODULE_EXTERNAL_REFERENCE(zlib, node::RegisterExternalReferences)
+NODE_BINDING_CONTEXT_AWARE_INTERNAL(zlib, node::Initialize)
+NODE_BINDING_EXTERNAL_REFERENCE(zlib, node::RegisterExternalReferences)

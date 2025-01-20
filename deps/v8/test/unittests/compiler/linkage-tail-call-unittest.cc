@@ -38,16 +38,17 @@ class LinkageTailCall : public TestWithZone {
       if (locations->GetReturn(i).IsCallerFrameSlot()) stack_returns++;
     }
     return zone()->New<CallDescriptor>(
-        CallDescriptor::kCallCodeObject, MachineType::AnyTagged(),
+        CallDescriptor::kCallCodeObject, kDefaultCodeEntrypointTag,
+        MachineType::AnyTagged(),
         LinkageLocation::ForAnyRegister(MachineType::Pointer()),
         locations,  // location_sig
         stack_arguments,
-        Operator::kNoProperties,   // properties
-        0,                         // callee-saved
-        0,                         // callee-saved fp
-        CallDescriptor::kNoFlags,  // flags,
-        "", StackArgumentOrder::kDefault,
-        0,  // allocatable_registers
+        Operator::kNoProperties,           // properties
+        kNoCalleeSaved,                    // callee-saved
+        kNoCalleeSavedFp,                  // callee-saved fp
+        CallDescriptor::kNoFlags,          // flags,
+        "", StackArgumentOrder::kDefault,  // --
+        RegList{},                         // allocatable_registers
         stack_returns);
   }
 

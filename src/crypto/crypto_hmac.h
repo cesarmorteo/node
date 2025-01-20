@@ -3,11 +3,10 @@
 
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
+#include "base_object.h"
 #include "crypto/crypto_keys.h"
 #include "crypto/crypto_sig.h"
 #include "crypto/crypto_util.h"
-#include "allocated_buffer.h"
-#include "base_object.h"
 #include "env.h"
 #include "memory_tracker.h"
 #include "v8.h"
@@ -37,13 +36,13 @@ class Hmac : public BaseObject {
   static void Sign(const v8::FunctionCallbackInfo<v8::Value>& args);
 
  private:
-  HMACCtxPointer ctx_;
+  ncrypto::HMACCtxPointer ctx_;
 };
 
 struct HmacConfig final : public MemoryRetainer {
   CryptoJobMode job_mode;
   SignConfiguration::Mode mode;
-  std::shared_ptr<KeyObjectData> key;
+  KeyObjectData key;
   ByteSource data;
   ByteSource signature;
   const EVP_MD* digest;
@@ -68,7 +67,7 @@ struct HmacTraits final {
   static constexpr AsyncWrap::ProviderType Provider =
       AsyncWrap::PROVIDER_SIGNREQUEST;
 
-  static v8::Maybe<bool> AdditionalConfig(
+  static v8::Maybe<void> AdditionalConfig(
       CryptoJobMode mode,
       const v8::FunctionCallbackInfo<v8::Value>& args,
       unsigned int offset,
@@ -79,11 +78,9 @@ struct HmacTraits final {
       const HmacConfig& params,
       ByteSource* out);
 
-  static v8::Maybe<bool> EncodeOutput(
-      Environment* env,
-      const HmacConfig& params,
-      ByteSource* out,
-      v8::Local<v8::Value>* result);
+  static v8::MaybeLocal<v8::Value> EncodeOutput(Environment* env,
+                                                const HmacConfig& params,
+                                                ByteSource* out);
 };
 
 using HmacJob = DeriveBitsJob<HmacTraits>;

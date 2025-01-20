@@ -1,4 +1,4 @@
-// Flags: --expose-internals
+// Flags: --expose-internals --js-float16array
 
 'use strict';
 
@@ -7,6 +7,9 @@ const { internalBinding } = require('internal/test/binding');
 const assert = require('assert');
 const v8 = require('v8');
 const os = require('os');
+// TODO(bartlomieju): once `Float16Array` is available in stable V8,
+// remove this line and `--js-float16array` flag up top
+const { Float16Array } = globalThis;
 
 const circular = {};
 circular.circular = circular;
@@ -14,10 +17,19 @@ circular.circular = circular;
 const objects = [
   { foo: 'bar' },
   { bar: 'baz' },
+  new Int8Array([1, 2, 3, 4]),
   new Uint8Array([1, 2, 3, 4]),
+  new Int16Array([1, 2, 3, 4]),
+  new Uint16Array([1, 2, 3, 4]),
+  new Int32Array([1, 2, 3, 4]),
   new Uint32Array([1, 2, 3, 4]),
+  new Float32Array([1, 2, 3, 4]),
+  new Float64Array([1, 2, 3, 4]),
   new DataView(new ArrayBuffer(42)),
   Buffer.from([1, 2, 3, 4]),
+  new BigInt64Array([42n]),
+  new BigUint64Array([42n]),
+  new Float16Array([1, 2, 3, 4]),
   undefined,
   null,
   42,
@@ -99,7 +111,6 @@ const hostObject = new (internalBinding('js_stream').JSStream)();
 {
   const text = 'hostObjectTag';
   const data = Buffer.from(text);
-  const arrayBufferViews = common.getArrayBufferViews(data);
 
   // `buf` is one of `TypedArray` or `DataView`.
   function testWriteRawBytes(buf) {
@@ -130,9 +141,9 @@ const hostObject = new (internalBinding('js_stream').JSStream)();
     assert.strictEqual(des.readValue().val, hostObject);
   }
 
-  arrayBufferViews.forEach((buf) => {
+  for (const buf of common.getArrayBufferViews(data)) {
     testWriteRawBytes(buf);
-  });
+  }
 }
 
 {
@@ -155,18 +166,41 @@ const hostObject = new (internalBinding('js_stream').JSStream)();
 }
 
 {
+  // Test that an old serialized value can still be deserialized.
   const buf = Buffer.from('ff0d6f2203666f6f5e007b01', 'hex');
 
   const des = new v8.DefaultDeserializer(buf);
   des.readHeader();
+  assert.strictEqual(des.getWireFormatVersion(), 0x0d);
+
+  const value = des.readValue();
+  assert.strictEqual(value, value.foo);
+}
+
+{
+  const message = `New serialization format.
+
+    This test is expected to fail when V8 changes its serialization format.
+    When that happens, the "desStr" variable must be updated to the new value
+    and the change should be mentioned in the release notes, as it is semver-major.
+
+    Consider opening an issue as a heads up at https://github.com/nodejs/node/issues/new
+  `;
+
+  const desStr = 'ff0f6f2203666f6f5e007b01';
+
+  const desBuf = Buffer.from(desStr, 'hex');
+  const des = new v8.DefaultDeserializer(desBuf);
+  des.readHeader();
+  const value = des.readValue();
 
   const ser = new v8.DefaultSerializer();
   ser.writeHeader();
+  ser.writeValue(value);
 
-  ser.writeValue(des.readValue());
-
-  assert.deepStrictEqual(buf, ser.releaseBuffer());
-  assert.strictEqual(des.getWireFormatVersion(), 0x0d);
+  const serBuf = ser.releaseBuffer();
+  const serStr = serBuf.toString('hex');
+  assert.deepStrictEqual(serStr, desStr, message);
 }
 
 {

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -10,9 +10,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#ifdef __TANDEM
-# include <strings.h> /* strcasecmp */
-#endif
 #include <ctype.h>
 
 #include <openssl/bn.h>
@@ -22,10 +19,6 @@
 #include "internal/nelem.h"
 #include "internal/numbers.h"
 #include "testutil.h"
-
-#ifdef OPENSSL_SYS_WINDOWS
-# define strcasecmp _stricmp
-#endif
 
 /*
  * Things in boring, not in openssl.
@@ -64,7 +57,7 @@ static const char *findattr(STANZA *s, const char *key)
     PAIR *pp = s->pairs;
 
     for ( ; --i >= 0; pp++)
-        if (strcasecmp(pp->key, key) == 0)
+        if (OPENSSL_strcasecmp(pp->key, key) == 0)
             return pp->value;
     return NULL;
 }
@@ -896,6 +889,14 @@ static int test_gf2m_modinv(void)
             || !TEST_ptr(b[1] = BN_new())
             || !TEST_ptr(c = BN_new())
             || !TEST_ptr(d = BN_new()))
+        goto err;
+
+    /* Test that a non-sensical, too small value causes a failure */
+    if (!TEST_true(BN_one(b[0])))
+        goto err;
+    if (!TEST_true(BN_bntest_rand(a, 512, 0, 0)))
+        goto err;
+    if (!TEST_false(BN_GF2m_mod_inv(c, a, b[0], ctx)))
         goto err;
 
     if (!(TEST_true(BN_GF2m_arr2poly(p0, b[0]))
@@ -1732,8 +1733,17 @@ static int file_modsqrt(STANZA *s)
             || !TEST_ptr(ret2 = BN_new()))
         goto err;
 
+    if (BN_is_negative(mod_sqrt)) {
+        /* A negative testcase */
+        if (!TEST_ptr_null(BN_mod_sqrt(ret, a, p, ctx)))
+            goto err;
+
+        st = 1;
+        goto err;
+    }
+
     /* There are two possible answers. */
-    if (!TEST_true(BN_mod_sqrt(ret, a, p, ctx))
+    if (!TEST_ptr(BN_mod_sqrt(ret, a, p, ctx))
             || !TEST_true(BN_sub(ret2, p, ret)))
         goto err;
 
@@ -2881,6 +2891,152 @@ static int test_mod_exp_consttime(int i)
     return res;
 }
 
+/*
+ * Regression test to ensure BN_mod_exp2_mont fails safely if argument m is
+ * zero.
+ */
+static int test_mod_exp2_mont(void)
+{
+    int res = 0;
+    BIGNUM *exp_result = NULL;
+    BIGNUM *exp_a1 = NULL, *exp_p1 = NULL, *exp_a2 = NULL, *exp_p2 = NULL,
+           *exp_m = NULL;
+
+    if (!TEST_ptr(exp_result = BN_new())
+            || !TEST_ptr(exp_a1 = BN_new())
+            || !TEST_ptr(exp_p1 = BN_new())
+            || !TEST_ptr(exp_a2 = BN_new())
+            || !TEST_ptr(exp_p2 = BN_new())
+            || !TEST_ptr(exp_m = BN_new()))
+        goto err;
+
+    if (!TEST_true(BN_one(exp_a1))
+            || !TEST_true(BN_one(exp_p1))
+            || !TEST_true(BN_one(exp_a2))
+            || !TEST_true(BN_one(exp_p2)))
+        goto err;
+
+    BN_zero(exp_m);
+
+    /* input of 0 is even, so must fail */
+    if (!TEST_int_eq(BN_mod_exp2_mont(exp_result, exp_a1, exp_p1, exp_a2,
+                exp_p2, exp_m, ctx, NULL), 0))
+        goto err;
+
+    res = 1;
+
+err:
+    BN_free(exp_result);
+    BN_free(exp_a1);
+    BN_free(exp_p1);
+    BN_free(exp_a2);
+    BN_free(exp_p2);
+    BN_free(exp_m);
+    return res;
+}
+
+static int test_mod_inverse(void)
+{
+    int res = 0;
+    char *str = NULL;
+    BIGNUM *a = NULL;
+    BIGNUM *b = NULL;
+    BIGNUM *r = NULL;
+
+    if (!TEST_true(BN_dec2bn(&a, "5193817943")))
+        goto err;
+    if (!TEST_true(BN_dec2bn(&b, "3259122431")))
+        goto err;
+    if (!TEST_ptr(r = BN_new()))
+        goto err;
+    if (!TEST_ptr_eq(BN_mod_inverse(r, a, b, ctx), r))
+        goto err;
+    if (!TEST_ptr_ne(str = BN_bn2dec(r), NULL))
+        goto err;
+    if (!TEST_int_eq(strcmp(str, "2609653924"), 0))
+        goto err;
+
+    /* Note that this aliases the result with the modulus. */
+    if (!TEST_ptr_null(BN_mod_inverse(b, a, b, ctx)))
+        goto err;
+
+    res = 1;
+
+err:
+    BN_free(a);
+    BN_free(b);
+    BN_free(r);
+    OPENSSL_free(str);
+    return res;
+}
+
+static int test_mod_exp_alias(int idx)
+{
+    int res = 0;
+    char *str = NULL;
+    BIGNUM *a = NULL;
+    BIGNUM *b = NULL;
+    BIGNUM *c = NULL;
+    BIGNUM *r = NULL;
+
+    if (!TEST_true(BN_dec2bn(&a, "15")))
+        goto err;
+    if (!TEST_true(BN_dec2bn(&b, "10")))
+        goto err;
+    if (!TEST_true(BN_dec2bn(&c, "39")))
+        goto err;
+    if (!TEST_ptr(r = BN_new()))
+        goto err;
+
+    if (!TEST_int_eq((idx == 0 ? BN_mod_exp_simple
+                               : BN_mod_exp_recp)(r, a, b, c, ctx), 1))
+        goto err;
+    if (!TEST_ptr_ne(str = BN_bn2dec(r), NULL))
+        goto err;
+    if (!TEST_str_eq(str, "36"))
+        goto err;
+
+    OPENSSL_free(str);
+    str = NULL;
+
+    BN_copy(r, b);
+
+    /* Aliasing with exponent must work. */
+    if (!TEST_int_eq((idx == 0 ? BN_mod_exp_simple
+                               : BN_mod_exp_recp)(r, a, r, c, ctx), 1))
+        goto err;
+    if (!TEST_ptr_ne(str = BN_bn2dec(r), NULL))
+        goto err;
+    if (!TEST_str_eq(str, "36"))
+        goto err;
+
+    OPENSSL_free(str);
+    str = NULL;
+
+    /* Aliasing with modulus should return failure for the simple call. */
+    if (idx == 0) {
+        if (!TEST_int_eq(BN_mod_exp_simple(c, a, b, c, ctx), 0))
+            goto err;
+    } else {
+        if (!TEST_int_eq(BN_mod_exp_recp(c, a, b, c, ctx), 1))
+            goto err;
+        if (!TEST_ptr_ne(str = BN_bn2dec(c), NULL))
+            goto err;
+        if (!TEST_str_eq(str, "36"))
+            goto err;
+    }
+
+    res = 1;
+
+err:
+    BN_free(a);
+    BN_free(b);
+    BN_free(c);
+    BN_free(r);
+    OPENSSL_free(str);
+    return res;
+}
+
 static int file_test_run(STANZA *s)
 {
     static const FILETEST filetests[] = {
@@ -2990,6 +3146,8 @@ int setup_tests(void)
         ADD_ALL_TESTS(test_signed_mod_replace_ab, OSSL_NELEM(signed_mod_tests));
         ADD_ALL_TESTS(test_signed_mod_replace_ba, OSSL_NELEM(signed_mod_tests));
         ADD_TEST(test_mod);
+        ADD_TEST(test_mod_inverse);
+        ADD_ALL_TESTS(test_mod_exp_alias, 2);
         ADD_TEST(test_modexp_mont5);
         ADD_TEST(test_kronecker);
         ADD_TEST(test_rand);
@@ -3022,6 +3180,7 @@ int setup_tests(void)
         ADD_TEST(test_gcd_prime);
         ADD_ALL_TESTS(test_mod_exp, (int)OSSL_NELEM(ModExpTests));
         ADD_ALL_TESTS(test_mod_exp_consttime, (int)OSSL_NELEM(ModExpTests));
+        ADD_TEST(test_mod_exp2_mont);
         if (stochastic)
             ADD_TEST(test_rand_range);
     } else {

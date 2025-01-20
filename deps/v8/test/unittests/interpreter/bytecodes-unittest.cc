@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/interpreter/bytecodes.h"
+
 #include <vector>
 
 #include "src/init/v8.h"
-
+#include "src/interpreter/bytecode-flags-and-tokens.h"
 #include "src/interpreter/bytecode-register.h"
-#include "src/interpreter/bytecodes.h"
 #include "test/unittests/test-utils.h"
 
 namespace v8 {
@@ -41,10 +42,10 @@ TEST(OperandConversion, Parameters) {
   for (size_t p = 0; p < count; p++) {
     int parameter_count = parameter_counts[p];
     for (int i = 0; i < parameter_count; i++) {
-      Register r = Register::FromParameterIndex(i, parameter_count);
+      Register r = Register::FromParameterIndex(i);
       uint32_t operand_value = r.ToOperand();
       Register s = Register::FromOperand(operand_value);
-      CHECK_EQ(i, s.ToParameterIndex(parameter_count));
+      CHECK_EQ(i, s.ToParameterIndex());
     }
   }
 }
@@ -67,7 +68,7 @@ TEST(OperandConversion, RegistersParametersNoOverlap) {
   }
 
   for (int i = 0; i < parameter_count; i += 1) {
-    Register r = Register::FromParameterIndex(i, parameter_count);
+    Register r = Register::FromParameterIndex(i);
     uint32_t operand = r.ToOperand();
     uint8_t index = static_cast<uint8_t>(operand);
     CHECK_LT(index, operand_count.size());
@@ -360,6 +361,19 @@ TEST(ImplicitRegisterUse, SampleBytecodes) {
   CHECK(Bytecodes::WritesAccumulator(Bytecode::kAdd));
   CHECK_EQ(Bytecodes::GetImplicitRegisterUse(Bytecode::kAdd),
            ImplicitRegisterUse::kReadWriteAccumulator);
+}
+
+TEST(TypeOfLiteral, OnlyUndefinedGreaterThanU) {
+#define CHECK_LITERAL(Name, name)                     \
+  if (TestTypeOfFlags::LiteralFlag::k##Name ==        \
+      TestTypeOfFlags::LiteralFlag::kUndefined) {     \
+    CHECK_GT(strcmp(#name, "u"), 0);                  \
+  } else if (TestTypeOfFlags::LiteralFlag::k##Name != \
+             TestTypeOfFlags::LiteralFlag::kOther) {  \
+    CHECK_LT(strcmp(#name, "u"), 0);                  \
+  }
+  TYPEOF_LITERAL_LIST(CHECK_LITERAL);
+#undef CHECK_LITERAL
 }
 
 }  // namespace interpreter

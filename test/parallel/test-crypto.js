@@ -25,12 +25,6 @@ const common = require('../common');
 if (!common.hasCrypto)
   common.skip('missing crypto');
 
-common.expectWarning({
-  DeprecationWarning: [
-    ['crypto.createCipher is deprecated.', 'DEP0106'],
-  ]
-});
-
 const assert = require('assert');
 const crypto = require('crypto');
 const tls = require('tls');
@@ -121,6 +115,19 @@ function validateList(list) {
 const cryptoCiphers = crypto.getCiphers();
 assert(crypto.getCiphers().includes('aes-128-cbc'));
 validateList(cryptoCiphers);
+// Make sure all of the ciphers are supported by OpenSSL
+for (const algo of cryptoCiphers) {
+  const { ivLength, keyLength, mode } = crypto.getCipherInfo(algo);
+  let options;
+  if (mode === 'ccm')
+    options = { authTagLength: 8 };
+  else if (mode === 'ocb' || algo === 'chacha20-poly1305')
+    options = { authTagLength: 16 };
+  crypto.createCipheriv(algo,
+                        crypto.randomBytes(keyLength),
+                        crypto.randomBytes(ivLength || 0),
+                        options);
+}
 
 // Assume that we have at least AES256-SHA.
 const tlsCiphers = tls.getCiphers();
@@ -140,6 +147,9 @@ assert(!crypto.getHashes().includes('SHA256'));
 assert(crypto.getHashes().includes('RSA-SHA1'));
 assert(!crypto.getHashes().includes('rsa-sha1'));
 validateList(crypto.getHashes());
+// Make sure all of the hashes are supported by OpenSSL
+for (const algo of crypto.getHashes())
+  crypto.createHash(algo);
 
 // Assume that we have at least secp384r1.
 assert.notStrictEqual(crypto.getCurves().length, 0);
@@ -167,24 +177,6 @@ const encodingError = {
   message: "The argument 'encoding' is invalid for data of length 1." +
            " Received 'hex'",
 };
-
-// Regression tests for https://github.com/nodejs/node-v0.x-archive/pull/5725:
-// hex input that's not a power of two should throw, not assert in C++ land.
-['createCipher', 'createDecipher'].forEach((funcName) => {
-  assert.throws(
-    () => crypto[funcName]('aes192', 'test').update('0', 'hex'),
-    (error) => {
-      assert.ok(!('opensslErrorStack' in error));
-      if (common.hasFipsCrypto) {
-        return error instanceof Error &&
-               error.name === 'Error' &&
-               /^Error: not supported in FIPS mode$/.test(error);
-      }
-      assert.throws(() => { throw error; }, encodingError);
-      return true;
-    }
-  );
-});
 
 assert.throws(
   () => crypto.createHash('sha1').update('0', 'hex'),
@@ -282,6 +274,9 @@ function testEncoding(options, assertionHash) {
   let hashValue = '';
 
   hash.on('data', (data) => {
+    // The defaultEncoding has no effect on the hash value. It only affects data
+    // consumed by the Hash transform stream.
+    assert(Buffer.isBuffer(data));
     hashValue += data.toString('hex');
   });
 
@@ -291,6 +286,8 @@ function testEncoding(options, assertionHash) {
 
   hash.write('öäü');
   hash.end();
+
+  assert.strictEqual(hash._writableState.defaultEncoding, options?.defaultEncoding ?? 'utf8');
 }
 
 // Hash of "öäü" in utf8 format

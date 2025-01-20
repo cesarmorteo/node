@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -35,6 +35,8 @@ static int wsa_init_done = 0;
 #  include <unistd.h>
 #  if defined __VMS
 #   include <sys/socket.h>
+#  elif defined _HPUX_SOURCE
+#   include <sys/time.h>
 #  else
 #   include <sys/select.h>
 #  endif
@@ -394,13 +396,17 @@ int BIO_socket_wait(int fd, int for_read, time_t max_time)
     struct timeval tv;
     time_t now;
 
+#ifdef _WIN32
+    if ((SOCKET)fd == INVALID_SOCKET)
+#else
     if (fd < 0 || fd >= FD_SETSIZE)
+#endif
         return -1;
     if (max_time == 0)
         return 1;
 
     now = time(NULL);
-    if (max_time <= now)
+    if (max_time < now)
         return 0;
 
     FD_ZERO(&confds);

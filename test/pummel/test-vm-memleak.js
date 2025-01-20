@@ -24,8 +24,8 @@
 
 const common = require('../common');
 
-if (process.config.variables.asan) {
-  common.skip('ASAN messes with memory measurements');
+if (common.isASan) {
+  common.skip('ASan messes with memory measurements');
 }
 
 const assert = require('assert');
@@ -39,6 +39,7 @@ const interval = setInterval(function() {
   try {
     vm.runInNewContext('throw 1;');
   } catch {
+    // Continue regardless of error.
   }
 
   global.gc();

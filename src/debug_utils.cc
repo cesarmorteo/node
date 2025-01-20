@@ -1,6 +1,7 @@
 #include "debug_utils-inl.h"  // NOLINT(build/include)
 #include "env-inl.h"
 #include "node_internals.h"
+#include "util.h"
 
 #ifdef __POSIX__
 #if defined(__linux__)
@@ -58,13 +59,16 @@ namespace per_process {
 EnabledDebugList enabled_debug_list;
 }
 
+using v8::Local;
+using v8::StackTrace;
+
 void EnabledDebugList::Parse(Environment* env) {
   std::string cats;
   credentials::SafeGetenv("NODE_DEBUG_NATIVE", &cats, env);
-  Parse(cats, true);
+  Parse(cats);
 }
 
-void EnabledDebugList::Parse(const std::string& cats, bool enabled) {
+void EnabledDebugList::Parse(const std::string& cats) {
   std::string debug_categories = cats;
   while (!debug_categories.empty()) {
     std::string::size_type comma_pos = debug_categories.find(',');
@@ -74,7 +78,7 @@ void EnabledDebugList::Parse(const std::string& cats, bool enabled) {
   {                                                                            \
     static const std::string available_category = ToLower(#name);              \
     if (available_category.find(wanted) != std::string::npos)                  \
-      set_enabled(DebugCategory::name, enabled);                               \
+      set_enabled(DebugCategory::name);                                        \
   }
 
     DEBUG_CATEGORY_NAMES(V)
@@ -178,10 +182,13 @@ class Win32SymbolDebuggingContext final : public NativeSymbolDebuggingContext {
       return NameAndDisplacement(pSymbol->Name, dwDisplacement);
     } else {
       // SymFromAddr failed
-      const DWORD error = GetLastError();  // "eat" the error anyway
 #ifdef DEBUG
+      const DWORD error = GetLastError();
       fprintf(stderr, "SymFromAddr returned error : %lu\n", error);
-#endif
+#else
+      // Consume the error anyway
+      USE(GetLastError());
+#endif  // DEBUG
     }
     // End MSDN code
 
@@ -213,10 +220,13 @@ class Win32SymbolDebuggingContext final : public NativeSymbolDebuggingContext {
       sym.line = line.LineNumber;
     } else {
       // SymGetLineFromAddr64 failed
-      const DWORD error = GetLastError();  // "eat" the error anyway
 #ifdef DEBUG
+      const DWORD error = GetLastError();
       fprintf(stderr, "SymGetLineFromAddr64 returned error : %lu\n", error);
-#endif
+#else
+      // Consume the error anyway
+      USE(GetLastError());
+#endif  // DEBUG
     }
     // End MSDN code
 
@@ -236,10 +246,13 @@ class Win32SymbolDebuggingContext final : public NativeSymbolDebuggingContext {
       return szUndName;
     } else {
       // UnDecorateSymbolName failed
-      const DWORD error = GetLastError();  // "eat" the error anyway
 #ifdef DEBUG
+      const DWORD error = GetLastError();
       fprintf(stderr, "UnDecorateSymbolName returned error %lu\n", error);
-#endif
+#else
+      // Consume the error anyway
+      USE(GetLastError());
+#endif  // DEBUG
     }
     return nullptr;
   }
@@ -301,7 +314,8 @@ std::string NativeSymbolDebuggingContext::SymbolInfo::Display() const {
   return oss.str();
 }
 
-void DumpBacktrace(FILE* fp) {
+void DumpNativeBacktrace(FILE* fp) {
+  fprintf(fp, "----- Native stack trace -----\n\n");
   auto sym_ctx = NativeSymbolDebuggingContext::New();
   void* frames[256];
   const int size = sym_ctx->GetStackTrace(frames, arraysize(frames));
@@ -312,6 +326,22 @@ void DumpBacktrace(FILE* fp) {
   }
 }
 
+void DumpJavaScriptBacktrace(FILE* fp) {
+  v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
+  if (isolate == nullptr) {
+    return;
+  }
+
+  Local<StackTrace> stack;
+  if (!GetCurrentStackTrace(isolate).ToLocal(&stack)) {
+    return;
+  }
+
+  fprintf(fp, "\n----- JavaScript stack trace -----\n\n");
+  PrintStackTrace(isolate, stack, StackTracePrefix::kNumber);
+  fprintf(fp, "\n");
+}
+
 void CheckedUvLoopClose(uv_loop_t* loop) {
   if (uv_loop_close(loop) == 0) return;
 
@@ -319,7 +349,7 @@ void CheckedUvLoopClose(uv_loop_t* loop) {
 
   fflush(stderr);
   // Finally, abort.
-  CHECK(0 && "uv_loop_close() while having open handles");
+  UNREACHABLE("uv_loop_close() while having open handles");
 }
 
 void PrintLibuvHandleInformation(uv_loop_t* loop, FILE* stream) {
@@ -512,5 +542,6 @@ void FWrite(FILE* file, const std::string& str) {
 }  // namespace node
 
 extern "C" void __DumpBacktrace(FILE* fp) {
-  node::DumpBacktrace(fp);
+  node::DumpNativeBacktrace(fp);
+  node::DumpJavaScriptBacktrace(fp);
 }

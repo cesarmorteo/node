@@ -205,6 +205,38 @@ testMe.complete('str.len', common.mustCall(function(error, data) {
 
 putIn.run(['.clear']);
 
+// Tab completion should be case-insensitive if member part is lower-case
+putIn.run([
+  'var foo = { barBar: 1, BARbuz: 2, barBLA: 3 };',
+]);
+testMe.complete(
+  'foo.b',
+  common.mustCall(function(error, data) {
+    assert.deepStrictEqual(data, [
+      ['foo.BARbuz', 'foo.barBLA', 'foo.barBar'],
+      'foo.b',
+    ]);
+  })
+);
+
+putIn.run(['.clear']);
+
+// Tab completion should be case-insensitive if member part is upper-case
+putIn.run([
+  'var foo = { barBar: 1, BARbuz: 2, barBLA: 3 };',
+]);
+testMe.complete(
+  'foo.B',
+  common.mustCall(function(error, data) {
+    assert.deepStrictEqual(data, [
+      ['foo.BARbuz', 'foo.barBLA', 'foo.barBar'],
+      'foo.B',
+    ]);
+  })
+);
+
+putIn.run(['.clear']);
+
 // Tab completion should not break on spaces
 const spaceTimeout = setTimeout(function() {
   throw new Error('timeout');
@@ -243,7 +275,7 @@ testMe.complete('require(\'', common.mustCall(function(error, data) {
   assert.strictEqual(error, null);
   publicModules.forEach((lib) => {
     assert(
-      data[0].includes(lib) && data[0].includes(`node:${lib}`),
+      data[0].includes(lib) && (lib.startsWith('node:') || data[0].includes(`node:${lib}`)),
       `${lib} not found`
     );
   });
@@ -261,14 +293,18 @@ testMe.complete("require\t( 'n", common.mustCall(function(error, data) {
   assert.strictEqual(data.length, 2);
   assert.strictEqual(data[1], 'n');
   // require(...) completions include `node:`-prefixed modules:
-  publicModules.forEach((lib, index) =>
-    assert.strictEqual(data[0][index], `node:${lib}`));
-  assert.strictEqual(data[0][publicModules.length], '');
+  let lastIndex = -1;
+
+  publicModules.filter((lib) => !lib.startsWith('node:')).forEach((lib, index) => {
+    lastIndex = data[0].indexOf(`node:${lib}`);
+    assert.notStrictEqual(lastIndex, -1);
+  });
+  assert.strictEqual(data[0][lastIndex + 1], '');
   // There is only one Node.js module that starts with n:
-  assert.strictEqual(data[0][publicModules.length + 1], 'net');
-  assert.strictEqual(data[0][publicModules.length + 2], '');
+  assert.strictEqual(data[0][lastIndex + 2], 'net');
+  assert.strictEqual(data[0][lastIndex + 3], '');
   // It's possible to pick up non-core modules too
-  data[0].slice(publicModules.length + 3).forEach((completion) => {
+  data[0].slice(lastIndex + 4).forEach((completion) => {
     assert.match(completion, /^n/);
   });
 }));
@@ -369,7 +405,7 @@ putIn.run([
   'var custom = "test";',
 ]);
 testMe.complete('cus', common.mustCall(function(error, data) {
-  assert.deepStrictEqual(data, [['custom'], 'cus']);
+  assert.deepStrictEqual(data, [['CustomEvent', 'custom'], 'cus']);
 }));
 
 // Make sure tab completion doesn't crash REPL with half-baked proxy objects.
@@ -548,7 +584,7 @@ testMe.complete('obj.', common.mustCall(function(error, data) {
 
     data[0].forEach((key) => {
       if (!key || key === 'ele.biu') return;
-      assert.notStrictEqual(ele[key.substr(4)], undefined);
+      assert.notStrictEqual(ele[key.slice(4)], undefined);
     });
   }));
 });
@@ -558,18 +594,54 @@ testMe.complete('obj.', common.mustCall(function(error, data) {
 putIn.run(['.clear']);
 testMe.complete('Buffer.prototype.', common.mustCall());
 
+// Make sure repl gives correct autocomplete on literals
+testMe.complete('``.a', common.mustCall((err, data) => {
+  assert.strictEqual(data[0].includes('``.at'), true);
+}));
+testMe.complete('\'\'.a', common.mustCall((err, data) => {
+  assert.strictEqual(data[0].includes('\'\'.at'), true);
+}));
+testMe.complete('"".a', common.mustCall((err, data) => {
+  assert.strictEqual(data[0].includes('"".at'), true);
+}));
+testMe.complete('("").a', common.mustCall((err, data) => {
+  assert.strictEqual(data[0].includes('("").at'), true);
+}));
+testMe.complete('[].a', common.mustCall((err, data) => {
+  assert.strictEqual(data[0].includes('[].at'), true);
+}));
+testMe.complete('{}.a', common.mustCall((err, data) => {
+  assert.deepStrictEqual(data[0], []);
+}));
+
 const testNonGlobal = repl.start({
   input: putIn,
   output: putIn,
   useGlobal: false
 });
 
-const builtins = [['Infinity', 'Int16Array', 'Int32Array',
-                   'Int8Array'], 'I'];
+const builtins = [
+  [
+    'if',
+    'import',
+    'in',
+    'instanceof',
+    '',
+    'Infinity',
+    'Int16Array',
+    'Int32Array',
+    'Int8Array',
+    ...(common.hasIntl ? ['Intl'] : []),
+    'Iterator',
+    'inspector',
+    'isFinite',
+    'isNaN',
+    '',
+    'isPrototypeOf',
+  ],
+  'I',
+];
 
-if (common.hasIntl) {
-  builtins[0].push('Intl');
-}
 testNonGlobal.complete('I', common.mustCall((error, data) => {
   assert.deepStrictEqual(data, builtins);
 }));

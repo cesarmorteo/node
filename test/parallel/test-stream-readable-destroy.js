@@ -249,7 +249,7 @@ const assert = require('assert');
 
 {
   const read = new Readable({
-    read: common.mustNotCall(function() {})
+    read: common.mustNotCall()
   });
   read.destroy();
   assert.strictEqual(read.destroyed, true);
@@ -316,9 +316,9 @@ const assert = require('assert');
     assert.strictEqual(e.name, 'AbortError');
   }));
   assert.rejects((async () => {
-    /* eslint-disable-next-line no-unused-vars */
-    for await (const chunk of read) {}
-  })(), /AbortError/);
+    // eslint-disable-next-line no-unused-vars, no-empty
+    for await (const chunk of read) { }
+  })(), /AbortError/).then(common.mustCall());
   setTimeout(() => controller.abort(), 0);
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -103,6 +103,9 @@ typedef struct extensions_definition_st {
  * Definitions of all built-in extensions. NOTE: Changes in the number or order
  * of these extensions should be mirrored with equivalent changes to the
  * indexes ( TLSEXT_IDX_* ) defined in ssl_local.h.
+ * Extensions should be added to test/ext_internal_test.c as well, as that
+ * tests the ordering of the extensions.
+ *
  * Each extension has an initialiser, a client and
  * server side parser and a finaliser. The initialiser is called (if the
  * extension is relevant to the given context) even if we did not see the
@@ -123,7 +126,7 @@ typedef struct extensions_definition_st {
  * NOTE: WebSphere Application Server 7+ cannot handle empty extensions at
  * the end, keep these extensions before signature_algorithm.
  */
-#define INVALID_EXTENSION { 0x10000, 0, NULL, NULL, NULL, NULL, NULL, NULL }
+#define INVALID_EXTENSION { TLSEXT_TYPE_invalid, 0, NULL, NULL, NULL, NULL, NULL, NULL }
 static const EXTENSION_DEFINITION ext_defs[] = {
     {
         TLSEXT_TYPE_renegotiate,
@@ -412,6 +415,17 @@ static const EXTENSION_DEFINITION ext_defs[] = {
         tls_construct_ctos_psk, final_psk
     }
 };
+
+/* Returns a TLSEXT_TYPE for the given index */
+unsigned int ossl_get_extension_type(size_t idx)
+{
+    size_t num_exts = OSSL_NELEM(ext_defs);
+
+    if (idx >= num_exts)
+        return TLSEXT_TYPE_out_of_range;
+
+    return ext_defs[idx].type;
+}
 
 /* Check whether an extension's context matches the current context */
 static int validate_context(SSL *s, unsigned int extctx, unsigned int thisctx)
@@ -925,6 +939,15 @@ static int final_renegotiate(SSL *s, unsigned int context, int sent)
     return 1;
 }
 
+static ossl_inline void ssl_tsan_decr(const SSL_CTX *ctx,
+                                      TSAN_QUALIFIER int *stat)
+{
+    if (ssl_tsan_lock(ctx)) {
+        tsan_decr(stat);
+        ssl_tsan_unlock(ctx);
+    }
+}
+
 static int init_server_name(SSL *s, unsigned int context)
 {
     if (s->server) {
@@ -982,8 +1005,8 @@ static int final_server_name(SSL *s, unsigned int context, int sent)
      */
     if (SSL_IS_FIRST_HANDSHAKE(s) && s->ctx != s->session_ctx
             && s->hello_retry_request == SSL_HRR_NONE) {
-        tsan_counter(&s->ctx->stats.sess_accept);
-        tsan_decr(&s->session_ctx->stats.sess_accept);
+        ssl_tsan_counter(s->ctx, &s->ctx->stats.sess_accept);
+        ssl_tsan_decr(s->session_ctx, &s->session_ctx->stats.sess_accept);
     }
 
     /*
@@ -1397,7 +1420,11 @@ static int final_key_share(SSL *s, unsigned int context, int sent)
                     group_id = pgroups[i];
 
                     if (check_in_list(s, group_id, clntgroups, clnt_num_groups,
-                                      1))
+                                      1)
+                            && tls_group_allowed(s, group_id,
+                                                 SSL_SECOP_CURVE_SUPPORTED)
+                            && tls_valid_group(s, group_id, TLS1_3_VERSION,
+                                               TLS1_3_VERSION, 0, NULL))
                         break;
                 }
 
@@ -1685,15 +1712,9 @@ static int final_early_data(SSL *s, unsigned int context, int sent)
 
 static int final_maxfragmentlen(SSL *s, unsigned int context, int sent)
 {
-    /*
-     * Session resumption on server-side with MFL extension active
-     *  BUT MFL extension packet was not resent (i.e. sent == 0)
-     */
-    if (s->server && s->hit && USE_MAX_FRAGMENT_LENGTH_EXT(s->session)
-            && !sent ) {
-        SSLfatal(s, SSL_AD_MISSING_EXTENSION, SSL_R_BAD_EXTENSION);
-        return 0;
-    }
+    /* MaxFragmentLength defaults to disabled */
+    if (s->session->ext.max_fragment_len_mode == TLSEXT_max_fragment_length_UNSPECIFIED)
+        s->session->ext.max_fragment_len_mode = TLSEXT_max_fragment_length_DISABLED;
 
     /* Current SSL buffer is lower than requested MFL */
     if (s->session && USE_MAX_FRAGMENT_LENGTH_EXT(s->session)

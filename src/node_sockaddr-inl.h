@@ -157,7 +157,7 @@ void SocketAddress::Update(const sockaddr* data, size_t len) {
   memcpy(&address_, data, len);
 }
 
-v8::Local<v8::Object> SocketAddress::ToJS(
+v8::MaybeLocal<v8::Object> SocketAddress::ToJS(
     Environment* env,
     v8::Local<v8::Object> info) const {
   return AddressToJS(env, data(), info);
@@ -172,22 +172,9 @@ bool SocketAddress::operator!=(const SocketAddress& other) const {
   return !(*this == other);
 }
 
-bool SocketAddress::operator<(const SocketAddress& other) const {
-  return compare(other) == CompareResult::LESS_THAN;
-}
-
-bool SocketAddress::operator>(const SocketAddress& other) const {
-  return compare(other) == CompareResult::GREATER_THAN;
-}
-
-bool SocketAddress::operator<=(const SocketAddress& other) const {
-  CompareResult c = compare(other);
-  return c == CompareResult::NOT_COMPARABLE ? false :
-              c <= CompareResult::SAME;
-}
-
-bool SocketAddress::operator>=(const SocketAddress& other) const {
-  return compare(other) >= CompareResult::SAME;
+std::partial_ordering SocketAddress::operator<=>(
+    const SocketAddress& other) const {
+  return compare(other);
 }
 
 template <typename T>

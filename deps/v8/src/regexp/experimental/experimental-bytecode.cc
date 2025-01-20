@@ -36,22 +36,22 @@ std::ostream& operator<<(std::ostream& os, const RegExpInstruction& inst) {
     case RegExpInstruction::ASSERTION:
       os << "ASSERTION ";
       switch (inst.payload.assertion_type) {
-        case RegExpAssertion::START_OF_INPUT:
+        case RegExpAssertion::Type::START_OF_INPUT:
           os << "START_OF_INPUT";
           break;
-        case RegExpAssertion::END_OF_INPUT:
+        case RegExpAssertion::Type::END_OF_INPUT:
           os << "END_OF_INPUT";
           break;
-        case RegExpAssertion::START_OF_LINE:
+        case RegExpAssertion::Type::START_OF_LINE:
           os << "START_OF_LINE";
           break;
-        case RegExpAssertion::END_OF_LINE:
+        case RegExpAssertion::Type::END_OF_LINE:
           os << "END_OF_LINE";
           break;
-        case RegExpAssertion::BOUNDARY:
+        case RegExpAssertion::Type::BOUNDARY:
           os << "BOUNDARY";
           break;
-        case RegExpAssertion::NON_BOUNDARY:
+        case RegExpAssertion::Type::NON_BOUNDARY:
           os << "NON_BOUNDARY";
           break;
       }
@@ -70,6 +70,34 @@ std::ostream& operator<<(std::ostream& os, const RegExpInstruction& inst) {
       break;
     case RegExpInstruction::CLEAR_REGISTER:
       os << "CLEAR_REGISTER " << inst.payload.register_index;
+      break;
+    case RegExpInstruction::SET_QUANTIFIER_TO_CLOCK:
+      os << "SET_QUANTIFIER_TO_CLOCK " << inst.payload.quantifier_id;
+      break;
+    case RegExpInstruction::FILTER_QUANTIFIER:
+      os << "FILTER_QUANTIFIER " << inst.payload.quantifier_id;
+      break;
+    case RegExpInstruction::FILTER_GROUP:
+      os << "FILTER_GROUP " << inst.payload.group_id;
+      break;
+    case RegExpInstruction::FILTER_CHILD:
+      os << "FILTER_CHILD " << inst.payload.pc;
+      break;
+    case RegExpInstruction::BEGIN_LOOP:
+      os << "BEGIN_LOOP";
+      break;
+    case RegExpInstruction::END_LOOP:
+      os << "END_LOOP";
+      break;
+    case RegExpInstruction::WRITE_LOOKBEHIND_TABLE:
+      os << "WRITE_LOOKBEHIND_TABLE " << inst.payload.looktable_index;
+      break;
+    case RegExpInstruction::READ_LOOKBEHIND_TABLE:
+      os << "READ_LOOKBEHIND_TABLE "
+         << inst.payload.read_lookbehind.lookbehind_index() << " ("
+         << (inst.payload.read_lookbehind.is_positive() ? "positive"
+                                                        : "negative")
+         << ")";
       break;
   }
   return os;

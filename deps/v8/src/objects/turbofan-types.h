@@ -7,6 +7,8 @@
 
 #include "src/common/globals.h"
 #include "src/objects/heap-object.h"
+#include "src/objects/objects.h"
+#include "src/objects/tagged.h"
 #include "torque-generated/bit-fields.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -17,9 +19,14 @@ namespace internal {
 
 #include "torque-generated/src/objects/turbofan-types-tq.inc"
 
-class TurbofanTypeBits {
+class TurbofanTypeLowBits {
  public:
-  DEFINE_TORQUE_GENERATED_TURBOFAN_TYPE_BITS()
+  DEFINE_TORQUE_GENERATED_TURBOFAN_TYPE_LOW_BITS()
+};
+
+class TurbofanTypeHighBits {
+ public:
+  DEFINE_TORQUE_GENERATED_TURBOFAN_TYPE_HIGH_BITS()
 };
 
 }  // namespace internal

@@ -38,7 +38,8 @@ const options = {
   key: fixtures.readKey('agent2-key.pem'),
   cert: fixtures.readKey('agent2-cert.pem'),
   ciphers: '-ALL:ECDHE-RSA-AES128-SHA256',
-  ecdhCurve: 'prime256v1'
+  ecdhCurve: 'prime256v1',
+  maxVersion: 'TLSv1.2'
 };
 
 const reply = 'I AM THE WALRUS'; // Something recognizable
@@ -48,10 +49,10 @@ const server = tls.createServer(options, common.mustCall(function(conn) {
 }));
 
 server.listen(0, '127.0.0.1', common.mustCall(function() {
-  const cmd = `"${common.opensslCli}" s_client -cipher ${
+  const cmd = common.escapePOSIXShell`"${common.opensslCli}" s_client -cipher ${
     options.ciphers} -connect 127.0.0.1:${this.address().port}`;
 
-  exec(cmd, common.mustSucceed((stdout, stderr) => {
+  exec(...cmd, common.mustSucceed((stdout, stderr) => {
     assert(stdout.includes(reply));
     server.close();
   }));

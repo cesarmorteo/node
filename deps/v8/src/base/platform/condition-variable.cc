@@ -40,7 +40,7 @@ ConditionVariable::ConditionVariable() {
 
 
 ConditionVariable::~ConditionVariable() {
-#if defined(V8_OS_MACOSX)
+#if defined(V8_OS_DARWIN)
   // This hack is necessary to avoid a fatal pthreads subsystem bug in the
   // Darwin kernel. http://crbug.com/517681.
   {
@@ -86,7 +86,7 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
   struct timespec ts;
   int result;
   mutex->AssertHeldAndUnmark();
-#if V8_OS_MACOSX
+#if V8_OS_DARWIN
   // Mac OS X provides pthread_cond_timedwait_relative_np(), which does
   // not depend on the real time clock, which is what you really WANT here!
   ts = rel_time.ToTimespec();
@@ -111,7 +111,7 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
   ts = end_time.ToTimespec();
   result = pthread_cond_timedwait(
       &native_handle_, &mutex->native_handle(), &ts);
-#endif  // V8_OS_MACOSX
+#endif  // V8_OS_DARWIN
   mutex->AssertUnheldAndMark();
   if (result == ETIMEDOUT) {
     return false;
@@ -190,7 +190,7 @@ void ConditionVariable::Wait(Mutex* mutex) {
 }
 
 bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
-  SbTime microseconds = static_cast<SbTime>(rel_time.InMicroseconds());
+  int64_t microseconds = static_cast<int64_t>(rel_time.InMicroseconds());
   SbConditionVariableResult result = SbConditionVariableWaitTimed(
       &native_handle_, &mutex->native_handle(), microseconds);
   DCHECK(result != kSbConditionVariableFailed);

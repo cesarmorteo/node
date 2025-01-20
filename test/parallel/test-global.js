@@ -30,15 +30,17 @@ const assert = require('assert');
 const { builtinModules } = require('module');
 
 // Load all modules to actually cover most code parts.
-builtinModules.forEach((moduleName) => {
+for (const moduleName of builtinModules) {
   if (!moduleName.includes('/')) {
     try {
       // This could throw for e.g., crypto if the binary is not compiled
       // accordingly.
       require(moduleName);
-    } catch {}
+    } catch {
+      // Continue regardless of error.
+    }
   }
-});
+}
 
 {
   const expected = [
@@ -47,13 +49,26 @@ builtinModules.forEach((moduleName) => {
     'clearImmediate',
     'clearInterval',
     'clearTimeout',
+    'atob',
+    'btoa',
     'performance',
     'setImmediate',
     'setInterval',
     'setTimeout',
     'structuredClone',
+    'fetch',
+    'crypto',
+    'navigator',
   ];
   assert.deepStrictEqual(new Set(Object.keys(global)), new Set(expected));
+  expected.forEach((value) => {
+    const desc = Object.getOwnPropertyDescriptor(global, value);
+    if (typeof desc.value === 'function') {
+      assert.strictEqual(desc.value.name, value);
+    } else if (typeof desc.get === 'function') {
+      assert.strictEqual(desc.get.name, `get ${value}`);
+    }
+  });
 }
 
 common.allowGlobals('bar', 'foo');

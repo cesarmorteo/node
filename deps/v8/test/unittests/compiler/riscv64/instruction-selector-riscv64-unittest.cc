@@ -183,28 +183,28 @@ const IntCmp kCmpInstructions[] = {
      1U},
     {{&RawMachineAssembler::Word32Equal, "Word32Equal", kRiscvCmp,
       MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Word32NotEqual, "Word32NotEqual", kRiscvCmp,
       MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Int32LessThan, "Int32LessThan", kRiscvCmp,
       MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Int32LessThanOrEqual, "Int32LessThanOrEqual",
       kRiscvCmp, MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Int32GreaterThan, "Int32GreaterThan", kRiscvCmp,
       MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Int32GreaterThanOrEqual, "Int32GreaterThanOrEqual",
       kRiscvCmp, MachineType::Int32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Uint32LessThan, "Uint32LessThan", kRiscvCmp,
       MachineType::Uint32()},
-     1U},
+     COMPRESS_POINTERS_BOOL ? 3U : 1U},
     {{&RawMachineAssembler::Uint32LessThanOrEqual, "Uint32LessThanOrEqual",
       kRiscvCmp, MachineType::Uint32()},
-     1U}};
+     COMPRESS_POINTERS_BOOL ? 3U : 1U}};
 
 // ----------------------------------------------------------------------------
 // Conversion instructions.
@@ -312,8 +312,7 @@ TEST_P(InstructionSelectorCmpTest, Parameter) {
   StreamBuilder m(this, type, type, type);
   m.Return((m.*cmp.mi.constructor)(m.Parameter(0), m.Parameter(1)));
   Stream s = m.Build();
-
-  if (FLAG_debug_code &&
+  if (v8_flags.debug_code &&
       type.representation() == MachineRepresentation::kWord32) {
 #ifndef V8_COMPRESS_POINTERS
     ASSERT_EQ(6U, s.size());
@@ -358,7 +357,7 @@ TEST_P(InstructionSelectorCmpTest, Parameter) {
 #endif
   } else {
     ASSERT_EQ(cmp.expected_size, s.size());
-    EXPECT_EQ(cmp.mi.arch_opcode, s[0]->arch_opcode());
+    EXPECT_EQ(cmp.mi.arch_opcode, s[cmp.expected_size - 1]->arch_opcode());
     EXPECT_EQ(2U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
   }
@@ -415,93 +414,6 @@ INSTANTIATE_TEST_SUITE_P(InstructionSelectorTest,
                          InstructionSelectorLogicalTest,
                          ::testing::ValuesIn(kLogicalInstructions));
 
-TEST_F(InstructionSelectorTest, Word64XorMinusOneWithParameter) {
-  {
-    StreamBuilder m(this, MachineType::Int64(), MachineType::Int64());
-    m.Return(m.Word64Xor(m.Parameter(0), m.Int64Constant(-1)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-  {
-    StreamBuilder m(this, MachineType::Int64(), MachineType::Int64());
-    m.Return(m.Word64Xor(m.Int64Constant(-1), m.Parameter(0)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-}
-
-TEST_F(InstructionSelectorTest, Word32XorMinusOneWithParameter) {
-  {
-    StreamBuilder m(this, MachineType::Int32(), MachineType::Int32());
-    m.Return(m.Word32Xor(m.Parameter(0), m.Int32Constant(-1)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor32, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-  {
-    StreamBuilder m(this, MachineType::Int32(), MachineType::Int32());
-    m.Return(m.Word32Xor(m.Int32Constant(-1), m.Parameter(0)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor32, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-}
-
-TEST_F(InstructionSelectorTest, Word64XorMinusOneWithWord64Or) {
-  {
-    StreamBuilder m(this, MachineType::Int64(), MachineType::Int64());
-    m.Return(m.Word64Xor(m.Word64Or(m.Parameter(0), m.Parameter(0)),
-                         m.Int64Constant(-1)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-  {
-    StreamBuilder m(this, MachineType::Int64(), MachineType::Int64());
-    m.Return(m.Word64Xor(m.Int64Constant(-1),
-                         m.Word64Or(m.Parameter(0), m.Parameter(0))));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-}
-
-TEST_F(InstructionSelectorTest, Word32XorMinusOneWithWord32Or) {
-  {
-    StreamBuilder m(this, MachineType::Int32(), MachineType::Int32());
-    m.Return(m.Word32Xor(m.Word32Or(m.Parameter(0), m.Parameter(0)),
-                         m.Int32Constant(-1)));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor32, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-  {
-    StreamBuilder m(this, MachineType::Int32(), MachineType::Int32());
-    m.Return(m.Word32Xor(m.Int32Constant(-1),
-                         m.Word32Or(m.Parameter(0), m.Parameter(0))));
-    Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvNor32, s[0]->arch_opcode());
-    EXPECT_EQ(2U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
-  }
-}
 
 TEST_F(InstructionSelectorTest, Word32ShlWithWord32And) {
   TRACED_FORRANGE(int32_t, shift, 0, 30) {
@@ -1000,7 +912,7 @@ TEST_F(InstructionSelectorTest, ChangeUint32ToUint64AfterLoad) {
     EXPECT_EQ(kMode_None, s[0]->addressing_mode());
     EXPECT_EQ(2U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
-    EXPECT_EQ(kRiscvLw, s[1]->arch_opcode());
+    EXPECT_EQ(kRiscvLwu, s[1]->arch_opcode());
     EXPECT_EQ(kMode_MRI, s[1]->addressing_mode());
     EXPECT_EQ(kRiscvZeroExtendWord, s[2]->arch_opcode());
     EXPECT_EQ(2U, s[1]->InputCount());
@@ -1053,19 +965,6 @@ struct MemoryAccessImm1 {
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryAccessImm1& acc) {
-  return os << acc.type;
-}
-
-struct MemoryAccessImm2 {
-  MachineType type;
-  ArchOpcode store_opcode;
-  ArchOpcode store_opcode_unaligned;
-  bool (InstructionSelectorTest::Stream::*val_predicate)(
-      const InstructionOperand*) const;
-  const int32_t immediates[40];
-};
-
-std::ostream& operator<<(std::ostream& os, const MemoryAccessImm2& acc) {
   return os << acc.type;
 }
 
@@ -1181,6 +1080,20 @@ const MemoryAccessImm1 kMemoryAccessImmMoreThan16bit[] = {
      &InstructionSelectorTest::Stream::IsInteger,
      {-65000, -55000, 32777, 55000, 65000}}};
 
+#ifdef RISCV_HAS_NO_UNALIGNED
+struct MemoryAccessImm2 {
+  MachineType type;
+  ArchOpcode store_opcode;
+  ArchOpcode store_opcode_unaligned;
+  bool (InstructionSelectorTest::Stream::*val_predicate)(
+      const InstructionOperand*) const;
+  const int32_t immediates[40];
+};
+
+std::ostream& operator<<(std::ostream& os, const MemoryAccessImm2& acc) {
+  return os << acc.type;
+}
+
 const MemoryAccessImm2 kMemoryAccessesImmUnaligned[] = {
     {MachineType::Int16(),
      kRiscvUsh,
@@ -1222,7 +1135,7 @@ const MemoryAccessImm2 kMemoryAccessesImmUnaligned[] = {
       -89,   -87,   -86,   -82,   -44,   -23,   -3,    0,    7,    10,
       39,    52,    69,    71,    91,    92,    107,   109,  115,  124,
       286,   655,   1362,  1569,  2587,  3067,  3096,  3462, 3510, 4095}}};
-
+#endif
 }  // namespace
 
 using InstructionSelectorMemoryAccessTest =
@@ -1297,8 +1210,8 @@ TEST_P(InstructionSelectorMemoryAccessImmTest, StoreWithImmediateIndex) {
     EXPECT_EQ(memacc.store_opcode, s[0]->arch_opcode());
     EXPECT_EQ(kMode_MRI, s[0]->addressing_mode());
     ASSERT_EQ(3U, s[0]->InputCount());
-    ASSERT_EQ(InstructionOperand::IMMEDIATE, s[0]->InputAt(1)->kind());
-    EXPECT_EQ(index, s.ToInt32(s[0]->InputAt(1)));
+    ASSERT_EQ(InstructionOperand::IMMEDIATE, s[0]->InputAt(2)->kind());
+    EXPECT_EQ(index, s.ToInt32(s[0]->InputAt(2)));
     EXPECT_EQ(0U, s[0]->OutputCount());
   }
 }
@@ -1315,10 +1228,10 @@ TEST_P(InstructionSelectorMemoryAccessImmTest, StoreZero) {
     EXPECT_EQ(memacc.store_opcode, s[0]->arch_opcode());
     EXPECT_EQ(kMode_MRI, s[0]->addressing_mode());
     ASSERT_EQ(3U, s[0]->InputCount());
-    ASSERT_EQ(InstructionOperand::IMMEDIATE, s[0]->InputAt(1)->kind());
-    EXPECT_EQ(index, s.ToInt32(s[0]->InputAt(1)));
     ASSERT_EQ(InstructionOperand::IMMEDIATE, s[0]->InputAt(2)->kind());
-    EXPECT_EQ(0, s.ToInt64(s[0]->InputAt(2)));
+    EXPECT_EQ(index, s.ToInt32(s[0]->InputAt(2)));
+    ASSERT_EQ(InstructionOperand::IMMEDIATE, s[0]->InputAt(0)->kind());
+    EXPECT_EQ(0, s.ToInt64(s[0]->InputAt(0)));
     EXPECT_EQ(0U, s[0]->OutputCount());
   }
 }
@@ -1327,6 +1240,7 @@ INSTANTIATE_TEST_SUITE_P(InstructionSelectorTest,
                          InstructionSelectorMemoryAccessImmTest,
                          ::testing::ValuesIn(kMemoryAccessesImm));
 
+#ifdef RISCV_HAS_NO_UNALIGNED
 using InstructionSelectorMemoryAccessUnalignedImmTest =
     InstructionSelectorTestWithParam<MemoryAccessImm2>;
 
@@ -1358,7 +1272,7 @@ TEST_P(InstructionSelectorMemoryAccessUnalignedImmTest, StoreZero) {
 INSTANTIATE_TEST_SUITE_P(InstructionSelectorTest,
                          InstructionSelectorMemoryAccessUnalignedImmTest,
                          ::testing::ValuesIn(kMemoryAccessesImmUnaligned));
-
+#endif
 // ----------------------------------------------------------------------------
 // Load/store offsets more than 16 bits.
 // ----------------------------------------------------------------------------
@@ -1413,7 +1327,7 @@ TEST_F(InstructionSelectorTest, Word32EqualWithZero) {
     m.Return(m.Word32Equal(m.Parameter(0), m.Int32Constant(0)));
     Stream s = m.Build();
     ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvCmpZero, s[0]->arch_opcode());
+    EXPECT_EQ(kRiscvCmpZero32, s[0]->arch_opcode());
     EXPECT_EQ(kMode_None, s[0]->addressing_mode());
     ASSERT_EQ(1U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
@@ -1425,7 +1339,7 @@ TEST_F(InstructionSelectorTest, Word32EqualWithZero) {
     m.Return(m.Word32Equal(m.Int32Constant(0), m.Parameter(0)));
     Stream s = m.Build();
     ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvCmpZero, s[0]->arch_opcode());
+    EXPECT_EQ(kRiscvCmpZero32, s[0]->arch_opcode());
     EXPECT_EQ(kMode_None, s[0]->addressing_mode());
     ASSERT_EQ(1U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
@@ -1449,7 +1363,7 @@ TEST_F(InstructionSelectorTest, Word64EqualWithZero) {
   }
   {
     StreamBuilder m(this, MachineType::Int64(), MachineType::Int64());
-    m.Return(m.Word64Equal(m.Int32Constant(0), m.Parameter(0)));
+    m.Return(m.Word64Equal(m.Int64Constant(0), m.Parameter(0)));
     Stream s = m.Build();
     ASSERT_EQ(1U, s.size());
     EXPECT_EQ(kRiscvCmpZero, s[0]->arch_opcode());
@@ -1582,10 +1496,18 @@ TEST_F(InstructionSelectorTest, Word32ReverseBytes) {
     StreamBuilder m(this, MachineType::Int32(), MachineType::Int32());
     m.Return(m.Word32ReverseBytes(m.Parameter(0)));
     Stream s = m.Build();
-    ASSERT_EQ(1U, s.size());
-    // EXPECT_EQ(kRiscvByteSwap32, s[0]->arch_opcode());
-    EXPECT_EQ(1U, s[0]->InputCount());
-    EXPECT_EQ(1U, s[0]->OutputCount());
+    if (CpuFeatures::IsSupported(ZBB)) {
+      ASSERT_EQ(2U, s.size());
+      EXPECT_EQ(kRiscvRev8, s[0]->arch_opcode());
+      EXPECT_EQ(kRiscvShr64, s[1]->arch_opcode());
+      EXPECT_EQ(1U, s[0]->InputCount());
+      EXPECT_EQ(1U, s[0]->OutputCount());
+    } else {
+      ASSERT_EQ(1U, s.size());
+      EXPECT_EQ(kRiscvByteSwap32, s[0]->arch_opcode());
+      EXPECT_EQ(1U, s[0]->InputCount());
+      EXPECT_EQ(1U, s[0]->OutputCount());
+    }
   }
 }
 
@@ -1595,10 +1517,53 @@ TEST_F(InstructionSelectorTest, Word64ReverseBytes) {
     m.Return(m.Word64ReverseBytes(m.Parameter(0)));
     Stream s = m.Build();
     ASSERT_EQ(1U, s.size());
-    EXPECT_EQ(kRiscvByteSwap64, s[0]->arch_opcode());
+    if (CpuFeatures::IsSupported(ZBB)) {
+      EXPECT_EQ(kRiscvRev8, s[0]->arch_opcode());
+    } else {
+      EXPECT_EQ(kRiscvByteSwap64, s[0]->arch_opcode());
+    }
     EXPECT_EQ(1U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
   }
+}
+
+TEST_F(InstructionSelectorTest, ExternalReferenceLoad1) {
+  // Test offsets we can use kMode_Root for.
+  const int64_t kOffsets[] = {0, 1, 4, INT32_MIN, INT32_MAX};
+  TRACED_FOREACH(int64_t, offset, kOffsets) {
+    StreamBuilder m(this, MachineType::Int64());
+    ExternalReference reference =
+        base::bit_cast<ExternalReference>(isolate()->isolate_root() + offset);
+    Node* const value =
+        m.Load(MachineType::Int64(), m.ExternalConstant(reference));
+    m.Return(value);
+
+    Stream s = m.Build();
+
+    ASSERT_EQ(1U, s.size());
+    EXPECT_EQ(kRiscvLd, s[0]->arch_opcode());
+    EXPECT_EQ(kMode_Root, s[0]->addressing_mode());
+    EXPECT_EQ(1U, s[0]->InputCount());
+    EXPECT_EQ(s.ToInt64(s[0]->InputAt(0)), offset);
+    EXPECT_EQ(1U, s[0]->OutputCount());
+  }
+}
+
+TEST_F(InstructionSelectorTest, ExternalReferenceLoad2) {
+  // Offset too large, we cannot use kMode_Root.
+  StreamBuilder m(this, MachineType::Int64());
+  int64_t offset = 0x100000000;
+  ExternalReference reference =
+      base::bit_cast<ExternalReference>(isolate()->isolate_root() + offset);
+  Node* const value =
+      m.Load(MachineType::Int64(), m.ExternalConstant(reference));
+  m.Return(value);
+
+  Stream s = m.Build();
+
+  ASSERT_EQ(1U, s.size());
+  EXPECT_EQ(kRiscvLd, s[0]->arch_opcode());
+  EXPECT_NE(kMode_Root, s[0]->addressing_mode());
 }
 
 }  // namespace compiler
